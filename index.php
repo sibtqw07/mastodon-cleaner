@@ -1,4 +1,15 @@
 <?php
+#####################################
+#
+# Web UI for Mastodon / Pleroma cleaner.
+# Delete posts older than X days using
+# the profile stored in config.sqlite,
+# created via the web UI (index.php).
+#
+# Author: JD Watson <j@jd@jonw.zone>
+#
+#####################################
+
 declare(strict_types=1);
 
 $dbPath = __DIR__ . '/config.sqlite';
