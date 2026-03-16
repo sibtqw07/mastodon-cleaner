@@ -6,7 +6,7 @@
 # the profile stored in config.sqlite,
 # created via the web UI (index.php).
 #
-# Author: JD Watson <j@jd@jonw.zone>
+# Author: JD Watson <jd@jonw.zone>
 #
 #####################################
 

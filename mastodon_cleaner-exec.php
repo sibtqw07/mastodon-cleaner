@@ -8,7 +8,7 @@
 #
 # usage: php ./mastodon_cleaner-exec.php [--dry-run]
 #
-# Author: JD Watson <j@jd@jonw.zone>
+# Author: JD Watson <jd@jonw.zone>
 #
 #####################################
 
