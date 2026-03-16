@@ -184,6 +184,13 @@ function buildCronFromCustom(int $min, int $hour, int $dayMonth, int $month, int
     return trim("$m $h $dom $mon $dow");
 }
 
+function deleteProfile(PDO $pdo, int $id): bool
+{
+    $stmt = $pdo->prepare('DELETE FROM profiles WHERE id = :id');
+    $stmt->execute([':id' => $id]);
+    return $stmt->rowCount() > 0;
+}
+
 function presetKeyForCron(string $cron, array $presets): string
 {
     if ($cron === '') {
@@ -245,6 +252,7 @@ $crontabMessage   = null;
 
 $errors         = [];
 $saved          = false;
+$deleted        = false;
 $runOutput      = null;
 $runDry         = true;
 $currentProfileId = null;
@@ -253,6 +261,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $profileId   = isset($_POST['profile_id']) && ctype_digit((string)$_POST['profile_id'])
         ? (int)$_POST['profile_id']
         : null;
+
+    // Handle delete profile
+    if (isset($_POST['delete_profile']) && $profileId > 0) {
+        $existing = loadProfile($pdo, $profileId);
+        if ($existing !== null) {
+            if ($crontabSupported) {
+                $scriptPath = __DIR__ . '/mastodon_cleaner-exec.php';
+                $unifiedLog = __DIR__ . '/mastodon_cleaner.log';
+                updateCrontabForProfile($profileId, '', $scriptPath, $unifiedLog);
+            }
+            deleteProfile($pdo, $profileId);
+            $deleted = true;
+            $profilesList = loadAllProfiles($pdo);
+            $currentProfileId = !empty($profilesList) ? (int)$profilesList[0]['id'] : null;
+        }
+    } else {
     $name        = trim($_POST['name'] ?? '');
     $baseUrl     = trim($_POST['base_url'] ?? '');
     $accountId   = trim($_POST['account_id'] ?? '');
@@ -354,6 +378,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $cmd .= ' 2>&1';
             $runOutput = shell_exec($cmd);
         }
+    }
     }
 } else {
     if (isset($_GET['profile']) && ctype_digit($_GET['profile'])) {
@@ -488,13 +513,58 @@ function e(string $value): string
             color: var(--muted);
         }
         .footer {
+            margin-top: 1.75rem;
+            font-size: 0.8rem;
+            color: var(--muted);
+        }
+        .footer-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-top: 1.75rem;
             gap: 1rem;
-            font-size: 0.8rem;
+            flex-wrap: wrap;
+        }
+        .footer-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        .footer-run-mode {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-right: 0.25rem;
+        }
+        .footer-primary-buttons {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .footer-status {
+            font-size: 0.85rem;
             color: var(--muted);
+            min-width: 4rem;
+        }
+        .footer-delete-row {
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: flex-end;
+        }
+        .btn-danger {
+            border-radius: 999px;
+            padding: 0.5rem 1rem;
+            border: 1px solid rgba(248,113,113,0.4);
+            background: transparent;
+            color: var(--danger);
+            font-weight: 500;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+        .btn-danger:hover {
+            background: rgba(249,115,115,0.12);
         }
         .btn-primary {
             border-radius: 999px;
@@ -575,6 +645,8 @@ function e(string $value): string
                 <div><?= e($err) ?></div>
             <?php endforeach; ?>
         </div>
+    <?php elseif ($deleted): ?>
+        <div class="status ok">Profile deleted.</div>
     <?php elseif ($saved && !$runOutput): ?>
         <div class="status ok">Profile saved.</div>
     <?php elseif ($saved && $runOutput): ?>
@@ -705,7 +777,7 @@ function e(string $value): string
                 <?php foreach ($SCHEDULE_PRESETS as $key => $info): ?>
                     <label class="inline" style="display:block;margin:0.25rem 0;">
                         <input type="radio" name="schedule_preset" value="<?= e($key) ?>" <?= $currentPreset === $key ? 'checked' : '' ?>
-                               data-preset="<?= e($key) ?>">
+                               data-preset="<?= e($key) ?>" data-cron="<?= e(isset($info['cron']) && $info['cron'] !== null ? $info['cron'] : '') ?>">
                         <span><?= e($info['label']) ?></span>
                     </label>
                 <?php endforeach; ?>
@@ -749,38 +821,61 @@ function e(string $value): string
         (function(){
             var presetRadios = document.querySelectorAll('input[name="schedule_preset"]');
             var customBlock = document.getElementById('custom_schedule');
+            var rawCronInput = document.getElementById('schedule_cron');
             function toggle(){
                 var custom = document.querySelector('input[name="schedule_preset"][value="custom"]');
                 customBlock.style.display = custom && custom.checked ? '' : 'none';
             }
-            presetRadios.forEach(function(r){ r.addEventListener('change', toggle); });
+            function syncRawCron(){
+                var checked = document.querySelector('input[name="schedule_preset"]:checked');
+                if (checked && rawCronInput) {
+                    var cron = checked.getAttribute('data-cron') || '';
+                    rawCronInput.value = cron;
+                }
+            }
+            presetRadios.forEach(function(r){
+                r.addEventListener('change', function(){
+                    toggle();
+                    syncRawCron();
+                });
+            });
             toggle();
+            syncRawCron();
         })();
         </script>
 
         <div class="footer">
-            <div>Settings are stored in a local SQLite file and used by the cleaner script.</div>
-            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
-                <label class="inline" style="margin:0;">
-                    <input type="radio" name="run_mode" value="dry" id="run_dry" <?= $runDry ? 'checked' : '' ?>>
-                    <span>Dry run</span>
-                </label>
-                <label class="inline" style="margin:0;">
-                    <input type="radio" name="run_mode" value="live" id="run_live" <?= !$runDry ? 'checked' : '' ?>>
-                    <span>Live delete</span>
-                </label>
-                <button type="submit" name="save_only" value="1" class="btn-primary">
-                    <span>Save profile</span>
-                </button>
-                <button type="submit" name="run_cleaner" value="1" class="btn-primary" style="background:linear-gradient(135deg,#f97373,#fb923c);box-shadow:0 18px 40px rgba(248,113,113,0.4);">
-                    <span>Save &amp; run</span>
-                </button>
-                <span id="exec_status"
-                      data-state="<?= e($runStatus) ?>"
-                      style="font-size:0.85rem;color:var(--muted);margin-left:0.25rem;">
-                    <?= e($runStatus) ?>
-                </span>
+            <div class="footer-row">
+                <div>Settings are stored in a local SQLite file and used by the cleaner script.</div>
+                <div class="footer-actions">
+                    <div class="footer-primary-buttons">
+                        <button type="submit" name="save_only" value="1" class="btn-primary">
+                            <span>Save profile</span>
+                        </button>
+                        <div class="footer-run-mode">
+                            <label class="inline" style="margin:0;">
+                                <input type="radio" name="run_mode" value="dry" id="run_dry" <?= $runDry ? 'checked' : '' ?>>
+                                <span>Dry run</span>
+                            </label>
+                            <label class="inline" style="margin:0;">
+                                <input type="radio" name="run_mode" value="live" id="run_live" <?= !$runDry ? 'checked' : '' ?>>
+                                <span>Live delete</span>
+                            </label>
+                        </div>
+                        <button type="submit" name="run_cleaner" value="1" class="btn-primary" style="background:linear-gradient(135deg,#f97373,#fb923c);box-shadow:0 18px 40px rgba(248,113,113,0.4);">
+                            <span>Save &amp; run</span>
+                        </button>
+                        <span id="exec_status" class="footer-status" data-state="<?= e($runStatus) ?>"><?= e($runStatus) ?></span>
+                    </div>
+                </div>
             </div>
+            <?php if (isset($profile['id'])): ?>
+            <div class="footer-delete-row">
+                <button type="submit" name="delete_profile" value="1" class="btn-danger" onclick="return confirm('Permanently delete this profile?');">
+                    Delete profile
+                </button>
+            </div>
+            <?php endif; ?>
         </div>
     </form>
     <script>
@@ -823,10 +918,18 @@ function e(string $value): string
     </script>
 
     <?php if ($runOutput !== null): ?>
-        <div style="margin-top:1.75rem;">
-            <div class="section-title">Last run output</div>
+        <div id="last-run-output" style="margin-top:1.75rem;">
+            <div class="section-title">Last run output (scrollable)</div>
             <pre style="background:rgba(15,23,42,0.9);border-radius:0.75rem;border:1px solid var(--border);padding:0.75rem 0.9rem;font-size:0.8rem;max-height:320px;overflow:auto;white-space:pre-wrap;"><?= e($runOutput) ?></pre>
         </div>
+        <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            var el = document.getElementById('last-run-output');
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        });
+        </script>
     <?php endif; ?>
 </div>
 </body>
